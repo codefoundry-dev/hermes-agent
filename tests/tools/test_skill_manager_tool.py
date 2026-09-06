@@ -178,6 +178,23 @@ class TestCreateSkill:
         assert not (tmp_path / "escape").exists()
 
 
+    def test_create_long_desc_survives_with_warning(self, tmp_path):
+        """A create is never refused over description length.
+
+        Refusing cost more than it saved: an agent recording something it had
+        just learned could only save it by hitting the budget exactly, and a
+        skill turned away over one character is a lesson lost. The author is
+        still told -- system_prompt_preview shows the truncated index line and
+        the linter raises description-length -- and the skill lands where it
+        can be edited."""
+        with _skill_dir(tmp_path):
+            result = _create_skill("long-desc", LONG_DESC_CONTENT)
+        assert result["success"] is True
+        assert (tmp_path / "long-desc" / "SKILL.md").exists()
+        assert "system_prompt_preview" in result
+        fm, _ = parse_frontmatter(LONG_DESC_CONTENT)
+        assert extract_skill_description(fm) in result["system_prompt_preview"]
+
     def test_edit_long_desc_still_allowed_with_preview(self, tmp_path):
         """Edit/patch paths stay permissive so existing over-limit skills
         remain maintainable — they warn via system_prompt_preview instead."""
