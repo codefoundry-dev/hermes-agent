@@ -281,11 +281,14 @@ def _sdk_supports_agent_sessions() -> bool:
 
 
 def _session_status_method(client: Any):
-    """Return the status setter: Agent Sessions API when available, else legacy."""
-    if _sdk_supports_agent_sessions():
-        method = getattr(client, "agents_sessions_setStatus", None)
-        if method is not None:
-            return method
+    """Return the status setter — always legacy ``assistant.threads.setStatus`` (CF patch).
+
+    ``agents.sessions.setStatus`` takes a lifecycle ENUM for ``status``, not display text:
+    Slack answers every "is thinking..." with ``invalid_arguments`` ("must be a valid enum
+    value [json-pointer:/status]"), and ``_set_thread_status`` swallows that at debug level,
+    so the in-progress status silently vanished the day slack-sdk 3.44 landed. The legacy
+    method takes free text and is supported until February 2027.
+    """
     return client.assistant_threads_setStatus
 
 
