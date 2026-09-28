@@ -1067,6 +1067,15 @@ def check_cronjob_requirements() -> bool:
         env_var_enabled("HERMES_INTERACTIVE")
         or env_var_enabled("HERMES_GATEWAY_SESSION")
         or env_var_enabled("HERMES_EXEC_ASK")
+        # CF patch: the messaging gateway never sets HERMES_GATEWAY_SESSION -- only
+        # tui_gateway does -- so the docstring's "gateway/messaging platforms" was
+        # false for every Slack/WhatsApp/Telegram turn and this tool was silently
+        # filtered out fleet-wide. The concurrent path binds HERMES_SESSION_PLATFORM
+        # via contextvars (see approval_context._is_gateway_approval_context, and
+        # skills_tool_setup._is_gateway_surface which already tests both). Cron is
+        # unaffected: _resolve_cron_disabled_toolsets strips `cronjob` from
+        # cron-spawned agents unless cron.allow_agent_scheduling is set.
+        or bool(get_session_env("HERMES_SESSION_PLATFORM"))
         or is_truthy_value(get_session_env("HERMES_CRON_SESSION", ""))
     )
 
