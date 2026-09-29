@@ -2737,6 +2737,14 @@ class SlackAdapter(BasePlatformAdapter):
             return "none"
         return value
 
+    def _slack_allowed_bots(self) -> frozenset:
+        """Bot ids admitted under allow_bots (``extra.allowed_bots`` / ``SLACK_ALLOWED_BOTS``); empty = any bot."""
+        raw = self.config.extra.get("allowed_bots")
+        if raw is None:
+            raw = _get_scoped_secret("SLACK_ALLOWED_BOTS", "")
+        parts = raw if isinstance(raw, (list, tuple, set)) else str(raw).split(",")
+        return frozenset(str(p).strip() for p in parts if str(p).strip())
+
     def _slack_api_human_users(self) -> frozenset:
         """User IDs whose Web-API posts count as human (``extra.api_human_users`` /
         ``SLACK_API_HUMAN_USERS``): ``xoxp-`` posts carry ``app_id`` and no ``client_msg_id`` so
@@ -4344,6 +4352,15 @@ class SlackAdapter(BasePlatformAdapter):
                     "[Slack] Dropping bot message under allow_bots=mentions: "
                     "no <@%s> mention in flat text or blocks", self._bot_user_id)
                 return True
+        # CF patch: SLACK_ALLOWED_BOTS narrows allow_bots from "any bot" to named ones. Admitted bots
+        # bypass the human allowlist (authz_mixin), so without this every bot in the workspace that
+        # @mentions us holds the same reach as SLACK_ALLOWED_USERS. Matches the bot user (U…) or bot (B…) id.
+        allowed_bots = self._slack_allowed_bots()
+        if allowed_bots and not ({msg_user, event.get("bot_id") or ""} & allowed_bots):
+            logger.info(
+                "[Slack] Dropping bot message from %s: not in SLACK_ALLOWED_BOTS",
+                msg_user or event.get("bot_id") or "?")
+            return True
         return bool(msg_user and self._bot_user_id and msg_user == self._bot_user_id)
 
     async def _prefilter_inbound(

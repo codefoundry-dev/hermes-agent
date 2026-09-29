@@ -2123,6 +2123,37 @@ class TestMessageRouting:
 
 
     @pytest.mark.asyncio
+    async def test_allowed_bots_admits_a_named_bot_that_mentions_us(self, adapter, monkeypatch):
+        """CF patch: SLACK_ALLOWED_BOTS narrows allow_bots=mentions to named bots."""
+        adapter.config.extra["allow_bots"] = "mentions"
+        monkeypatch.setenv("SLACK_ALLOWED_BOTS", "U_AX")
+        event = {
+            "text": "<@U_BOT> what did CF Weddings take this month?",
+            "user": "U_AX",
+            "bot_id": "B_AX",
+            "channel": "C123",
+            "channel_type": "channel",
+            "ts": "123.456",
+        }
+        await adapter._handle_slack_message(event)
+        adapter.handle_message.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_allowed_bots_drops_an_unnamed_bot_even_when_it_mentions_us(self, adapter, monkeypatch):
+        adapter.config.extra["allow_bots"] = "mentions"
+        monkeypatch.setenv("SLACK_ALLOWED_BOTS", "U_AX")
+        event = {
+            "text": "<@U_BOT> activate the ad campaign",
+            "user": "U_OTHER_BOT",
+            "bot_id": "B_OTHER",
+            "channel": "C123",
+            "channel_type": "channel",
+            "ts": "123.457",
+        }
+        await adapter._handle_slack_message(event)
+        adapter.handle_message.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_message_edit_with_new_mention_processed(self, adapter):
         """Editing @bot into a previously ignored MPIM message should route once."""
         original_event = {
