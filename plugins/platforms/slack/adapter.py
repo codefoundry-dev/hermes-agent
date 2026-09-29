@@ -4045,10 +4045,17 @@ class SlackAdapter(BasePlatformAdapter):
         runner = getattr(getattr(self, "_message_handler", None), "__self__", None)
         return getattr(runner, "_is_user_authorized", None)
 
-    def _early_reject_unauthorized(self, user_id: str, channel_id: str, is_dm: bool) -> bool:
+    def _early_reject_unauthorized(
+        self, user_id: str, channel_id: str, is_dm: bool, is_bot: bool = False) -> bool:
         """True (logged) when the sender is definitively unauthorized. Injected profile-bound check
         first (works under multiplex, where the handler has no ``__self__``), then runner
         introspection. Unknown (None) is NOT a rejection."""
+        # CF patch: a bot reaching here already passed _drop_bot_sender (allow_bots + mention +
+        # SLACK_ALLOWED_BOTS). The source built below carries no is_bot, so the runner's
+        # ALLOW_BOTS bypass could never fire and every admitted bot was rejected as a human.
+        # The runner's own is_bot-aware check still runs on the built MessageEvent.
+        if is_bot:
+            return False
         chat_type = "dm" if is_dm else "group"
         decision = (
             self._is_sender_authorized(user_id, chat_type, channel_id)
@@ -4515,7 +4522,8 @@ class SlackAdapter(BasePlatformAdapter):
         is_one_to_one_dm = channel_type == "im"
         # Reject unauthorized users before the expensive lookups/downloads;
         # the runner's own auth check only runs after MessageEvent is built.
-        if self._early_reject_unauthorized(user_id, channel_id, is_dm):
+        if self._early_reject_unauthorized(
+                user_id, channel_id, is_dm, is_bot=self._event_declares_bot_sender(event)):
             return
         thread_ts = self._session_thread_ts(event, ts, is_dm, assistant_meta)
         bot_uid = self._team_bot_user_ids.get(team_id, self._bot_user_id)
