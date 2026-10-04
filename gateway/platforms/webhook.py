@@ -69,6 +69,10 @@ _REPO_RE = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 _GH_TOKEN_VARS = ("GH_TOKEN", "GITHUB_TOKEN")
 
 
+# CF patch: how long a sender is told to wait when the gateway is draining (a restart takes ~10-20 s).
+_DRAINING_RETRY_AFTER_S = 20
+
+
 def _is_loopback_host(host: Optional[str]) -> bool:
     """True when `host` binds only to the local machine (falsy → non-loopback: usually a public default bind)."""
     return bool(host) and host.strip().lower() in _LOOPBACK_HOSTS
@@ -615,6 +619,14 @@ class WebhookAdapter(BasePlatformAdapter):
             # cron_job routes: the job's own skills apply; the rendered prompt is only per-run context.
             if (skills := route_config.get("skills", [])) and not route_config.get("cron_job"):
                 prompt = self._apply_skills(prompt, skills)
+        # CF patch: a draining gateway refuses every new turn AFTER this handler has answered 202, so
+        # the sender believes the event was delivered and nothing ever runs. Refuse up front with 503 +
+        # Retry-After instead, before the delivery id is recorded, so the sender's retry is not a
+        # "duplicate". deliver_only routes start no turn and are left alone.
+        if not route_config.get("deliver_only") and self._gateway_not_accepting_work():
+            logger.info("[webhook] gateway draining - refusing event=%s route=%s with 503", event_type, route_name)
+            return web.json_response({"status": "unavailable", "error": "Gateway is restarting; retry shortly"},
+                                     status=503, headers={"Retry-After": str(_DRAINING_RETRY_AFTER_S)})
         delivery_id = headers.get("X-GitHub-Delivery", headers.get("svix-id", headers.get(
             "webhook-id", headers.get("X-Request-ID", str(int(time.time() * 1000))))))
         now = time.time()  # idempotency: skip duplicate deliveries (webhook retries)
@@ -634,6 +646,14 @@ class WebhookAdapter(BasePlatformAdapter):
                                       "delivery_id": delivery_id}, status=202)
         return self._dispatch_agent_run(request, route_config, route_name, profile, payload, prompt, event_type,
                                         delivery_id, now)
+
+    def _gateway_not_accepting_work(self) -> bool:
+        """True while the runner refuses new turns: shutting down/restarting (``_draining``) or an
+        external maintenance drain. ``is True`` so a stand-in runner object never reads as draining."""
+        runner = self.gateway_runner
+        if runner is None:
+            return False
+        return getattr(runner, "_draining", False) is True or getattr(runner, "_external_drain_active", False) is True
 
     def _dispatch_agent_run(self, request, route_config: dict, route_name: str, profile, payload: Any, prompt: str,
                             event_type: str, delivery_id: str, now: float) -> "web.Response":

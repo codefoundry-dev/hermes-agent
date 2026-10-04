@@ -1176,3 +1176,50 @@ def test_route_profile_validation_fails_closed():
         assert WebhookAdapter._route_allows_profile(
             {"profile": malformed}, "worker"
         ) is False
+
+
+# ===================================================================
+# Draining gateway (CF patch)
+# ===================================================================
+
+
+class TestDrainingGateway:
+    """A draining gateway refuses new turns after a 202 would already have been sent; the
+    handler must say 503 + Retry-After up front instead, and not burn the delivery id."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("flag", ["_draining", "_external_drain_active"])
+    async def test_draining_gateway_answers_503_and_accepts_the_retry(self, flag):
+        routes = {"drain": {"secret": _INSECURE_NO_AUTH, "prompt": "test"}}
+        adapter = _make_adapter(routes=routes)
+        adapter.handle_message = AsyncMock()
+        runner = MagicMock()
+        runner._draining = False
+        runner._external_drain_active = False
+        setattr(runner, flag, True)
+        adapter.gateway_runner = runner
+
+        app = _create_app(adapter)
+        async with TestClient(TestServer(app)) as cli:
+            headers = {"webhook-id": "msg-1"}
+            resp = await cli.post("/webhooks/drain", json={"a": 1}, headers=headers)
+            assert resp.status == 503
+            assert resp.headers.get("Retry-After") == "20"
+            adapter.handle_message.assert_not_called()
+
+            # Back up: the same delivery id is a new delivery, not a "duplicate".
+            setattr(runner, flag, False)
+            resp = await cli.post("/webhooks/drain", json={"a": 1}, headers=headers)
+            assert resp.status == 202
+
+    @pytest.mark.asyncio
+    async def test_stand_in_runner_is_not_read_as_draining(self):
+        routes = {"live": {"secret": _INSECURE_NO_AUTH, "prompt": "test"}}
+        adapter = _make_adapter(routes=routes)
+        adapter.handle_message = AsyncMock()
+        adapter.gateway_runner = MagicMock()  # attributes are truthy MagicMocks, not True
+
+        app = _create_app(adapter)
+        async with TestClient(TestServer(app)) as cli:
+            resp = await cli.post("/webhooks/live", json={"a": 1}, headers={"webhook-id": "m-2"})
+            assert resp.status == 202
