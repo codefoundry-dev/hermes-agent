@@ -788,6 +788,11 @@ def skill_manage(
     # to a helper: guards, ledger capture, patch matching, validation, rollback,
     # and the atomic replacement all belong to the same ownership window.
     with _skill_mutation_lock(name):
+        # A managed skill (symlink into the CF git checkout) is invisible to _find_skill; fork it
+        # into a real, editable copy first, or refuse with the reason (CF patch, skill_managed_fork).
+        from tools.skill_managed_fork import fork_if_managed
+        if (fork_err := fork_if_managed(_skills_dir(), name, action)) is not None:
+            return json.dumps(_err(fork_err), ensure_ascii=False)
         # Ledger pre-capture: telemetry, not a gate — failures must NEVER block the mutation. delete
         # destroys the whole package (consolidation may have re-homed support files first), so
         # complete it from the newest curator backup or a restore is hollow.

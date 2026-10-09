@@ -222,6 +222,14 @@ def _skill_manage_batch(operations, default_name: str = None, task_id: str = Non
     # skill_manage() calls re-enter them. Without the outer fence a concurrent writer landing
     # between the snapshot and a rollback would be silently reverted.
     with _smt._skill_mutation_locks(names):
+        # Fork managed skills BEFORE the snapshot (CF patch): snapshotted as absent, a rollback
+        # would delete the fresh copy and leave the profile without the skill until the next sync.
+        from tools.skill_managed_fork import fork_if_managed
+        for i, op in enumerate(operations):
+            if (fork_err := fork_if_managed(_smt._skills_dir(), names[i], op.get("action"))) is not None:
+                return json.dumps({"success": False, "error": f"operations[{i}] ({op.get('action')} on "
+                                   f"'{names[i]}') failed: {fork_err} — batch aborted, nothing written.",
+                                   "failed_index": i, "completed_before_failure": 0}, ensure_ascii=False)
         snap_root = Path(tempfile.mkdtemp(prefix="skill_batch_"))
         snapshots, snap_err = _snapshot_skills(names, snap_root, _smt._find_skill)
         if snap_err is not None:
